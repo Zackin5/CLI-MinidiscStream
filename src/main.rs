@@ -11,9 +11,13 @@ struct InputArgs {
     #[arg(short, long)]
     album_path: String,
 
-    /// Delay between songs (useful to automatically add track markers, rec 4 seconds)
-    #[arg(short, long, default_value_t = 0)]
-    delay: u8,
+    /// Delay between songs (useful to automatically add track markers, rec 3 seconds)
+    #[arg(short, long, default_value_t = 0.0)]
+    delay: f32,
+
+    /// Pre-playback pause (useful for 5 second wait on tape start)
+    #[arg(short, long, default_value_t = 0.0)]
+    pause: f32,
 
     /// Track range selector (use {skip_n}:{take_n}. Either {} can be empty. {take_n} supports negative values to count from end)
     #[arg(short, long, default_value_t = String::new())]
@@ -67,6 +71,13 @@ fn get_audio_paths(album_path: &String, track_range: std::ops::Range<Option<isiz
         Some(i) => i,
         None => 0
     };
+
+    // Check if provided path is a file, return it if true
+    let attr = fs::metadata(album_path).expect("Failed to read path");
+    if attr.is_file() {
+        return vec![PathBuf::from(album_path)];
+    }
+
 
     // Read directory contents
     let valid_exts = vec![OsStr::new("mp3"), OsStr::new("wav"), OsStr::new("flac")];  // Filter list for file selector
@@ -184,7 +195,7 @@ fn main() {
     println!("Album contents to be played:");
     let song_paths = get_audio_paths(&args.album_path, track_range);
 
-    if args.delay > 0 {
+    if args.delay > 0.0 {
         println!("{} second delay in-between tracks", args.delay);
     }
 
@@ -192,12 +203,24 @@ fn main() {
     println!("");
     let output_device = get_devices();
 
+    // Apply playback pause
+    if args.pause > 0.0 {
+        println!("Waiting {} seconds...", args.pause);
+
+        let n_seconds = time::Duration::from_secs_f32(args.pause.into());
+
+        thread::sleep(n_seconds);
+    }
+
+    // Play songs
     for song in song_paths {
         pipe_audio(&output_device, song);
 
         // Apply audio playback delay
-        if args.delay > 0 {
-            let n_seconds = time::Duration::from_secs(args.delay.into());
+        if args.delay > 0.0 {
+            println!("Waiting {} seconds...", args.delay);
+
+            let n_seconds = time::Duration::from_secs_f32(args.delay.into());
             thread::sleep(n_seconds);
         }
 
