@@ -1,4 +1,4 @@
-use std::{io, fs, path::PathBuf, fs::File, ffi::OsStr, time, thread, ops::Range, cmp};
+use std::{io, fs, path::{PathBuf, Path}, fs::{File, read_to_string}, ffi::OsStr, time, thread, ops::Range, cmp};
 use rodio::{Decoder, OutputStream, Sink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
 use clap::Parser;
 use chrono::{Local};
@@ -59,8 +59,41 @@ fn parse_track_ranges(track_select_string: &String) -> std::ops::Range<Option<is
     return Range { start: lower_bound, end: Some(upper_bound) }
 }
 
+fn parse_playlist(path: &PathBuf, valid_audio_exts: &Vec<&OsStr>) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+
+    for line in read_to_string(path).unwrap().lines() {
+        // Skip comments
+        if line.starts_with("#") {
+            continue;
+        }
+
+        // Check if file exists
+        let file_path = Path::new(line);
+
+        if !file_path.exists() {
+            println!("Failed to find file \"{}\" from playlist", line);
+            continue;
+        }
+
+        // Check if file is an audio file
+        if !valid_audio_exts.contains(&file_path.extension().unwrap()) {
+            println!("Playlist file \"{}\" is not a supported audio type", line);
+            continue;
+        }
+
+        // Store file and continue
+        result.push(file_path.to_path_buf());
+    }
+
+    return result;
+}
+
 
 fn get_audio_paths(album_path: &String, track_range: std::ops::Range<Option<isize>>) -> Vec<PathBuf> {
+    let valid_audio_exts = vec![OsStr::new("mp3"), OsStr::new("wav"), OsStr::new("flac")];  // Filter list for file selector
+    let playlist_exts = vec![OsStr::new("m3u8")];  // Valid playlists to load
+
     // Convert track ranges to valid counters
     let lower_bound = match track_range.start {
         Some(i) => i,
@@ -72,20 +105,31 @@ fn get_audio_paths(album_path: &String, track_range: std::ops::Range<Option<isiz
         None => 0
     };
 
-    // Check if provided path is a file, return it if true
+    // Check if provided path is a file, handle special logic if it is
     let attr = fs::metadata(album_path).expect("Failed to read path");
     if attr.is_file() {
-        return vec![PathBuf::from(album_path)];
+        let file_path_buf = PathBuf::from(album_path);
+        let file_ext = &file_path_buf.extension().unwrap();
+
+        // Return a single audio file if passed
+        if valid_audio_exts.contains(file_ext) {
+            return vec![file_path_buf];
+        }
+
+        // Parse a playlist if passed
+        if playlist_exts.contains(file_ext) {
+            return parse_playlist(&file_path_buf, &valid_audio_exts);
+        }
+
+        panic!("Unsupported extension \"{}\" for input file \"{}\"", file_ext.to_str().unwrap(), album_path)
     }
 
 
-    // Read directory contents
-    let valid_exts = vec![OsStr::new("mp3"), OsStr::new("wav"), OsStr::new("flac")];  // Filter list for file selector
-
+    // Read contents of a directory
     let mut folder_song_contents: Vec<PathBuf> = Vec::new();  // Result list
     for item in fs::read_dir(album_path).expect("Failed to read path") {
         if let Ok(item) = item {
-            if item.path().extension().is_some() && valid_exts.contains(&item.path().extension().unwrap()) {
+            if item.path().extension().is_some() && valid_audio_exts.contains(&item.path().extension().unwrap()) {
                 folder_song_contents.push(item.path())
             }
         }
@@ -117,7 +161,6 @@ fn get_audio_paths(album_path: &String, track_range: std::ops::Range<Option<isiz
             break;
         }
 
-        println!("{:?}", path);
         selected_songs.push(path.to_path_buf());
     }
 
@@ -193,7 +236,11 @@ fn main() {
 
     // Get album song paths
     println!("Album contents to be played:");
-    let song_paths = get_audio_paths(&args.album_path, track_range);
+    let song_paths = &get_audio_paths(&args.album_path, track_range);
+
+    for path in song_paths {
+        println!("{:?}", path);
+    }
 
     if args.delay > 0.0 {
         println!("{} second delay in-between tracks", args.delay);
@@ -214,7 +261,7 @@ fn main() {
 
     // Play songs
     for song in song_paths {
-        pipe_audio(&output_device, song);
+        pipe_audio(&output_device, song.to_path_buf());
 
         // Apply audio playback delay
         if args.delay > 0.0 {
