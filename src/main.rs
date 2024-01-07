@@ -1,5 +1,5 @@
 use std::{io, fs, path::{PathBuf, Path}, fs::{File, read_to_string}, ffi::OsStr, time, thread, ops::Range, cmp};
-use rodio::{Decoder, OutputStream, Sink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
+use rodio::{Decoder, OutputStream, Sink, SpatialSink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
 use clap::Parser;
 use chrono::{Local};
 
@@ -7,19 +7,23 @@ use chrono::{Local};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct InputArgs {
-    /// Album directory to play files from
+    /// Album directory or playlist to play files from
     #[arg(short, long)]
-    album_path: String,
+    input_path: String,
 
-    /// Delay between songs (useful to automatically add track markers, rec 3 seconds)
+    /// Delay between songs. Useful to automatically add track markers on Minidisc, rec 3 seconds
     #[arg(short, long, default_value_t = 0.0)]
     delay: f32,
 
-    /// Pre-playback pause (useful for 5 second wait on tape start)
+    /// Pre-playback pause. Useful for syncing the 5 second blank start on cassette tapes
     #[arg(short, long, default_value_t = 0.0)]
     pause: f32,
 
-    /// Track range selector (use {skip_n}:{take_n}. Either {} can be empty. {take_n} supports negative values to count from end)
+    /// Pan modifier for audio playback. Useful for countering bad recording channel balance. Negative values are left-bias, positive right.
+    #[arg(short, long, default_value_t = 0.0, allow_hyphen_values = true)]
+    stereo_pan: f32,
+
+    /// Track range selector. Use {skip_n}:{take_n}. Either {} can be empty. {take_n} supports negative values to count from end
     #[arg(short, long, default_value_t = String::new())]
     track_select: String
 }
@@ -211,20 +215,37 @@ fn get_devices() -> rodio::Device {
 }
 
 
-fn pipe_audio(output_device: &rodio::Device, output_file_path: PathBuf) {
+fn pipe_audio(output_device: &rodio::Device, output_file_path: PathBuf, stereo_pan: f32) {
     // Get a output stream handle to the output physical sound device
     let (_stream, stream_handle) = OutputStream::try_from_device(&output_device).unwrap();
-    let sink = Sink::try_new(&stream_handle).unwrap();
-
+    
     // Load a sound from a file, using a path relative to Cargo.toml
     let file = io::BufReader::new(File::open(output_file_path.clone()).unwrap());
     // Decode that sound file into a source
     let source = Decoder::new(file).unwrap();
-
+    
     // Play audio and wait
     println!("[{}] Playing {}...", Local::now().format("%H:%M"), output_file_path.file_name().unwrap().to_string_lossy());
-    sink.append(source);
-    sink.sleep_until_end();
+    if stereo_pan.abs() <= f32::EPSILON {
+        // Un-panned audio
+        let sink = Sink::try_new(&stream_handle).unwrap();
+
+        sink.append(source);
+        sink.sleep_until_end();
+    }
+    else {
+        // Panned audio
+        let pan_postition = [stereo_pan, 0.0, 0.0];
+
+        let pan_sink = SpatialSink::try_new(&stream_handle, 
+            pan_postition,
+            [-1.0, 0.0, 0.0], 
+            [1.0, 0.0, 0.0])
+            .unwrap();
+
+            pan_sink.append(source);
+            pan_sink.sleep_until_end();
+    }
 }
 
 
@@ -236,7 +257,7 @@ fn main() {
 
     // Get album song paths
     println!("Album contents to be played:");
-    let song_paths = &get_audio_paths(&args.album_path, track_range);
+    let song_paths = &get_audio_paths(&args.input_path, track_range);
 
     for path in song_paths {
         println!("{:?}", path);
@@ -261,7 +282,7 @@ fn main() {
 
     // Play songs
     for song in song_paths {
-        pipe_audio(&output_device, song.to_path_buf());
+        pipe_audio(&output_device, song.to_path_buf(), args.stereo_pan);
 
         // Apply audio playback delay
         if args.delay > 0.0 {
