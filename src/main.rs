@@ -1,7 +1,7 @@
 use std::{io, fs, path::{PathBuf, Path}, fs::{File, read_to_string}, ffi::OsStr, time, thread, ops::Range, cmp};
 use rodio::{Decoder, OutputStream, Sink, SpatialSink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
 use clap::Parser;
-use chrono::{Local};
+use chrono::{Local, Duration};
 
 /// Simple program to play a folder of songs to an audio device
 #[derive(Parser, Debug)]
@@ -11,13 +11,13 @@ struct InputArgs {
     #[arg(short, long)]
     input_path: String,
 
-    /// Delay between songs. Useful to automatically add track markers on Minidisc, rec 3 seconds
-    #[arg(short, long, default_value_t = 0.0)]
-    delay: f32,
-
-    /// Pre-playback pause. Useful for syncing the 5 second blank start on cassette tapes
+    /// Pause duration between songs. Useful to automatically add track markers on Minidisc, rec 3 seconds
     #[arg(short, long, default_value_t = 0.0)]
     pause: f32,
+
+    /// Pre-playback start delay. Useful for syncing the 5 second blank start on cassette tapes
+    #[arg(short, long, default_value_t = 0.0)]
+    delay: f32,
 
     /// Pan modifier for audio playback. Useful for countering bad recording channel balance. Negative values are left-bias, positive right.
     #[arg(short, long, default_value_t = 0.0, allow_hyphen_values = true)]
@@ -225,7 +225,7 @@ fn pipe_audio(output_device: &rodio::Device, output_file_path: PathBuf, stereo_p
     let source = Decoder::new(file).unwrap();
     
     // Play audio and wait
-    println!("[{}] Playing {}...", Local::now().format("%H:%M"), output_file_path.file_name().unwrap().to_string_lossy());
+    println!("[{}] Playing {}...", Local::now().format("%I:%M %p"), output_file_path.file_name().unwrap().to_string_lossy());
     if stereo_pan.abs() <= f32::EPSILON {
         // Un-panned audio
         let sink = Sink::try_new(&stream_handle).unwrap();
@@ -249,6 +249,12 @@ fn pipe_audio(output_device: &rodio::Device, output_file_path: PathBuf, stereo_p
 }
 
 
+fn println_end_time(duration: i64) {
+    let endtime_delta = Local::now() + Duration::minutes(duration);
+    println!("Will end at [{}] for [+{}m]", endtime_delta.format("%I:%M %p"), duration);
+}
+
+
 fn main() {
     let args = InputArgs::parse();
 
@@ -263,36 +269,42 @@ fn main() {
         println!("{:?}", path);
     }
 
-    if args.delay > 0.0 {
-        println!("{} second delay in-between tracks", args.delay);
+    if args.pause > 0.0 {
+        println!("{} second delay in-between tracks", args.pause);
     }
 
     // Get audio device
     println!("");
     let output_device = get_devices();
 
+    println!("");
     // Apply playback pause
-    if args.pause > 0.0 {
-        println!("Waiting {} seconds...", args.pause);
+    if args.delay > 0.0 {
+        println!("Waiting {} seconds...", args.delay);
 
-        let n_seconds = time::Duration::from_secs_f32(args.pause.into());
+        let n_seconds = time::Duration::from_secs_f32(args.delay.into());
 
         thread::sleep(n_seconds);
     }
+
+    println_end_time(32);
+    println_end_time(45);
+    println_end_time(74);
+    println_end_time(80);
 
     // Play songs
     for song in song_paths {
         pipe_audio(&output_device, song.to_path_buf(), args.stereo_pan);
 
-        // Apply audio playback delay
-        if args.delay > 0.0 {
-            println!("Waiting {} seconds...", args.delay);
+        // Apply audio playback pause delay
+        if args.pause > 0.0 {
+            println!("Waiting {} seconds...", args.pause);
 
-            let n_seconds = time::Duration::from_secs_f32(args.delay.into());
+            let n_seconds = time::Duration::from_secs_f32(args.pause.into());
             thread::sleep(n_seconds);
         }
 
     }
 
-    println!("Done!");
+    println!("[{}] Done!", Local::now().format("%H:%M"));
 }
