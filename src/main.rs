@@ -224,11 +224,11 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
     let mut output_files: Vec<PathBuf> = Vec::new();
 
     // Make output dir
-    let cache_dir = output_dir_path.join(format!("p{0:.1}", stereo_pan));
+    let cache_dir = output_dir_path.join(format!("p{0:.2}", stereo_pan));
     fs::create_dir_all(cache_dir.clone()).expect("Failed to make temp processing directory");
 
     // Calculate pan volumes
-    println!("Using a pan of {0:.1} (-L:R+)", stereo_pan);
+    println!("Using a pan of {0:.2} (-L:R+)", stereo_pan);
     let left_channel_vol = f32::max(f32::min(1.0 - stereo_pan, 1.0), 0.0);
     let right_channel_vol = f32::max(f32::min(1.0 + stereo_pan, 1.0), 0.0);
 
@@ -252,8 +252,8 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
             .arg("--replay-gain")                        // Normalize track volume
                 .arg("album")
             .arg("remix")                         // Pan channels
-            .arg(format!("1v{0:.1}", left_channel_vol))  // Left channel
-            .arg(format!("2v{0:.1}", right_channel_vol))  // Right channel
+            .arg(format!("1v{0:.2}", left_channel_vol))  // Left channel
+            .arg(format!("2v{0:.2}", right_channel_vol))  // Right channel
             .status()
             .expect("Failed to execute SOX. Is the path valid?");
 
