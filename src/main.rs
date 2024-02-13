@@ -1,5 +1,5 @@
-use std::{io, fs, path::{PathBuf, Path}, fs::{File, read_to_string}, ffi::OsStr, time, thread, ops::Range, cmp};
-use rodio::{Decoder, OutputStream, Sink, SpatialSink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
+use std::{io, fs, path::{PathBuf, Path}, fs::{File, read_to_string}, ffi::OsStr, time, thread, ops::Range, cmp, process::Command, env};
+use rodio::{Decoder, OutputStream, Sink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
 use clap::Parser;
 use chrono::{Local, Duration};
 
@@ -25,7 +25,11 @@ struct InputArgs {
 
     /// Track range selector. Use {skip_n}:{take_n}. Either {} can be empty. {take_n} supports negative values to count from end
     #[arg(short, long, default_value_t = String::new())]
-    track_select: String
+    track_select: String,
+
+    /// Path to a SOX executable for pre-processing audio
+    #[arg(long, default_value_t = ("sox".to_owned()))]
+    sox_path: String
 }
 
 
@@ -62,6 +66,7 @@ fn parse_track_ranges(track_select_string: &String) -> std::ops::Range<Option<is
 
     return Range { start: lower_bound, end: Some(upper_bound) }
 }
+
 
 fn parse_playlist(path: &PathBuf, valid_audio_exts: &Vec<&OsStr>) -> Vec<PathBuf> {
     let mut result = Vec::new();
@@ -215,37 +220,59 @@ fn get_devices() -> rodio::Device {
 }
 
 
-fn pipe_audio(output_device: &rodio::Device, output_file_path: PathBuf, stereo_pan: f32) {
+fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>, stereo_pan: f32, sox_path: &String) -> Vec<PathBuf> {
+    let mut output_files: Vec<PathBuf> = Vec::new();
+
+    // Make output dir
+    fs::create_dir_all(output_dir_path.clone()).expect("Failed to make temp processing directory");
+
+    // Calculate pan volumes
+    let left_channel_vol = f32::max(f32::min(1.0 - stereo_pan, 1.0), 0.0);
+    let right_channel_vol = f32::max(f32::min(1.0 + stereo_pan, 1.0), 0.0);
+
+    // Process audio files using SOX
+    for input_song_path in audio_file_paths {
+        let input_path = input_song_path.as_path().to_owned();
+        let output_path = output_dir_path.join(input_path.file_name().unwrap());
+
+        let cmd_retrn = Command::new(sox_path)
+            .arg(input_path.into_os_string())   // Input audio
+            .arg(output_path.clone().into_os_string())  // Output path
+            .arg("-V1")                         // Logging output setting
+            .arg("--replay-gain")                        // Normalize track volume
+                .arg("album")
+            .arg("remix")                         // Pan channels
+            .arg(format!("1v{0:.1}", left_channel_vol))  // Left channel
+            .arg(format!("2v{0:.1}", right_channel_vol))  // Right channel
+            .status()
+            .expect("Failed to execute SOX. Is the path valid?");
+
+        if !cmd_retrn.success() {
+            panic!("SOX failed to execute successfully")
+        }
+
+        output_files.push(output_path);
+    }
+
+    return output_files;
+}
+
+
+fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf) {
     // Get a output stream handle to the output physical sound device
     let (_stream, stream_handle) = OutputStream::try_from_device(&output_device).unwrap();
     
     // Load a sound from a file, using a path relative to Cargo.toml
-    let file = io::BufReader::new(File::open(output_file_path.clone()).unwrap());
+    let file = io::BufReader::new(File::open(audio_file_path.clone()).unwrap());
     // Decode that sound file into a source
     let source = Decoder::new(file).unwrap();
     
     // Play audio and wait
-    println!("[{}] Playing {}...", Local::now().format("%I:%M %p"), output_file_path.file_name().unwrap().to_string_lossy());
-    if stereo_pan.abs() <= f32::EPSILON {
-        // Un-panned audio
-        let sink = Sink::try_new(&stream_handle).unwrap();
+    println!("[{}] Playing {}...", Local::now().format("%I:%M %p"), audio_file_path.file_name().unwrap().to_string_lossy());
+    let sink = Sink::try_new(&stream_handle).unwrap();
 
-        sink.append(source);
-        sink.sleep_until_end();
-    }
-    else {
-        // Panned audio
-        let pan_postition = [stereo_pan, 0.0, 0.0];
-
-        let pan_sink = SpatialSink::try_new(&stream_handle, 
-            pan_postition,
-            [-1.0, 0.0, 0.0], 
-            [1.0, 0.0, 0.0])
-            .unwrap();
-
-            pan_sink.append(source);
-            pan_sink.sleep_until_end();
-    }
+    sink.append(source);
+    sink.sleep_until_end();
 }
 
 
@@ -273,6 +300,11 @@ fn main() {
         println!("{} second delay in-between tracks", args.pause);
     }
 
+    // Apply SOX edits
+    println!("Pre-processing files...");
+    let temp_output_dir = env::current_dir().unwrap().join("temp");
+    let processed_song_paths = preproccess_audio(&temp_output_dir, song_paths, args.stereo_pan, &args.sox_path);
+
     // Get audio device
     println!("");
     let output_device = get_devices();
@@ -293,8 +325,8 @@ fn main() {
     println_end_time(80);
 
     // Play songs
-    for song in song_paths {
-        pipe_audio(&output_device, song.to_path_buf(), args.stereo_pan);
+    for song in processed_song_paths {
+        pipe_audio(&output_device, song.to_path_buf());
 
         // Apply audio playback pause delay
         if args.pause > 0.0 {
@@ -306,5 +338,11 @@ fn main() {
 
     }
 
-    println!("[{}] Done!", Local::now().format("%H:%M"));
+    // Clean up processed files
+    match fs::remove_dir_all(temp_output_dir) {
+        Ok(a) => a,
+        Err(_) => println!("Failed to clean up temp directory...")
+    };
+
+    println!("[{}] Done!", Local::now().format("%I:%M %p"));
 }
