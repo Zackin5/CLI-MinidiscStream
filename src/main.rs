@@ -224,7 +224,8 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
     let mut output_files: Vec<PathBuf> = Vec::new();
 
     // Make output dir
-    fs::create_dir_all(output_dir_path.clone()).expect("Failed to make temp processing directory");
+    let cache_dir = output_dir_path.join(format!("p{0:.1}", stereo_pan));
+    fs::create_dir_all(cache_dir.clone()).expect("Failed to make temp processing directory");
 
     // Calculate pan volumes
     let left_channel_vol = f32::max(f32::min(1.0 - stereo_pan, 1.0), 0.0);
@@ -232,9 +233,17 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
 
     // Process audio files using SOX
     for input_song_path in audio_file_paths {
+        // Get input/output paths
         let input_path = input_song_path.as_path().to_owned();
-        let output_path = output_dir_path.join(input_path.file_name().unwrap());
+        let output_path = cache_dir.join(input_path.file_name().unwrap());
 
+        // Skip processing a file if we already did it on a previous run
+        if output_path.exists() {
+            output_files.push(output_path);
+            continue;
+        }
+
+        // Run SOX
         let cmd_retrn = Command::new(sox_path)
             .arg(input_path.into_os_string())   // Input audio
             .arg(output_path.clone().into_os_string())  // Output path
