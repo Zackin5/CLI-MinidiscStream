@@ -228,6 +228,7 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
     fs::create_dir_all(cache_dir.clone()).expect("Failed to make temp processing directory");
 
     // Calculate pan volumes
+    println!("Using a pan of {0:.1} (-L:R+)", stereo_pan);
     let left_channel_vol = f32::max(f32::min(1.0 - stereo_pan, 1.0), 0.0);
     let right_channel_vol = f32::max(f32::min(1.0 + stereo_pan, 1.0), 0.0);
 
