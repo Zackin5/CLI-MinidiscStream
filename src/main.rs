@@ -238,11 +238,11 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
 
     // Configure SOX progress bar
     let bar = ProgressBar::new(audio_file_paths.len().try_into().unwrap());
-    bar.set_style(ProgressStyle::with_template("Processing files{spinner} [{elapsed_precise}] [{bar:30.cyan}] {pos:>2}/{len:2}")
+    bar.set_style(ProgressStyle::with_template("Pre-processing files{spinner} [{elapsed_precise}] [{bar:30.cyan}] {pos:>2}/{len:2}")
         .unwrap()
         .progress_chars("| ")
         .tick_strings(&["   ", ".  ", ".. ", "...", "   "]));
-    bar.enable_steady_tick(time::Duration::from_millis(400));
+    bar.enable_steady_tick(time::Duration::from_millis(250));
 
     // Process audio files using SOX
     for input_song_path in audio_file_paths {
@@ -283,7 +283,7 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
 }
 
 
-fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf, song_n: usize, total_songs_n: usize) {
+fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf) {
     // Get a output stream handle to the output physical sound device
     let (_stream, stream_handle) = OutputStream::try_from_device(&output_device).unwrap();
 
@@ -293,10 +293,6 @@ fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf, song_n: u
     let source = Decoder::new(file).unwrap();
 
     // Play audio and wait
-    println!("[{}, {}/{}] Playing {}...", 
-        Local::now().format("%I:%M %p"), song_n, total_songs_n, 
-        audio_file_path.file_name().unwrap().to_string_lossy()
-    );
     let sink = Sink::try_new(&stream_handle).unwrap();
 
     sink.append(source);
@@ -354,19 +350,32 @@ fn main() {
     println_end_time(74, pause_delta);
     println_end_time(80, pause_delta);
 
+    // Configure playback progress bar
+    let playback_bar = ProgressBar::new(processed_song_paths.len() as u64);
+    playback_bar.set_style(ProgressStyle::with_template("[{elapsed_precise}, {pos}/{len}] {msg:.cyan}")
+        .unwrap()
+        .tick_strings(&["   ", ".  ", ".. ", "...", "   "]));
+    playback_bar.enable_steady_tick(time::Duration::from_millis(500));
+
     // Play songs
-    for (i, song) in processed_song_paths.iter().enumerate() {
-        pipe_audio(&output_device, song.to_path_buf(), i+1, processed_song_paths.len());
+    for song in processed_song_paths {
+        // Update playback bar
+        playback_bar.inc(1);
+        playback_bar.set_message(format!("{}", song.file_name().unwrap().to_string_lossy()));
+
+        // Load and stream audio file
+        pipe_audio(&output_device, song.to_path_buf());
 
         // Apply audio playback pause delay
         if args.pause > 0.0 {
-            println!("\tWaiting {} seconds...", args.pause);
+            playback_bar.set_message(format!("Waiting {} seconds..", args.pause));
 
             let n_seconds = time::Duration::from_secs_f32(args.pause.into());
             thread::sleep(n_seconds);
         }
-
     }
+    playback_bar.set_message("Done");
+    playback_bar.finish();
 
     // Clean up processed files
     match fs::remove_dir_all(temp_output_dir) {
