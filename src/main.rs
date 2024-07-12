@@ -1,7 +1,9 @@
-use std::{io, fs, path::{PathBuf, Path}, fs::{File, read_to_string}, ffi::OsStr, time, thread, ops::Range, cmp, process::Command, env};
+use core::time;
+use std::{cmp, env, ffi::OsStr, fs::{self, read_to_string, File}, io, ops::Range, path::{Path, PathBuf}, process::Command, thread};
 use rodio::{Decoder, OutputStream, Sink, cpal::{self, traits::HostTrait, traits::DeviceTrait}};
 use clap::Parser;
 use chrono::{Local, Duration};
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// Simple program to play a folder of songs to an audio device
 #[derive(Parser, Debug)]
@@ -228,12 +230,23 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
     fs::create_dir_all(cache_dir.clone()).expect("Failed to make temp processing directory");
 
     // Calculate pan volumes
-    println!("Using a pan of {0:.2} (-L:R+)", stereo_pan);
+    if stereo_pan != 0.0 {
+        println!("Using a pan of {0:.2} (-L:R+)", stereo_pan);
+    }
     let left_channel_vol = f32::max(f32::min(1.0 - stereo_pan, 1.0), 0.0);
     let right_channel_vol = f32::max(f32::min(1.0 + stereo_pan, 1.0), 0.0);
 
+    // Configure SOX progress bar
+    let bar = ProgressBar::new(audio_file_paths.len().try_into().unwrap());
+    bar.set_style(ProgressStyle::with_template("Processing files{spinner} [{elapsed_precise}] [{bar:30.cyan}] {pos:>2}/{len:2}")
+        .unwrap()
+        .progress_chars("| ")
+        .tick_strings(&["   ", ".  ", ".. ", "...", "   "]));
+    bar.enable_steady_tick(time::Duration::from_millis(400));
+
     // Process audio files using SOX
     for input_song_path in audio_file_paths {
+
         // Get input/output paths
         let input_path = input_song_path.as_path().to_owned();
         let output_path = cache_dir.join(input_path.file_name().unwrap());
@@ -262,23 +275,28 @@ fn preproccess_audio(output_dir_path: &PathBuf, audio_file_paths: &Vec<PathBuf>,
         }
 
         output_files.push(output_path);
+        bar.inc(1);
     }
+    bar.finish_and_clear();
 
     return output_files;
 }
 
 
-fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf) {
+fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf, song_n: usize, total_songs_n: usize) {
     // Get a output stream handle to the output physical sound device
     let (_stream, stream_handle) = OutputStream::try_from_device(&output_device).unwrap();
-    
+
     // Load a sound from a file, using a path relative to Cargo.toml
     let file = io::BufReader::new(File::open(audio_file_path.clone()).unwrap());
     // Decode that sound file into a source
     let source = Decoder::new(file).unwrap();
-    
+
     // Play audio and wait
-    println!("[{}] Playing {}...", Local::now().format("%I:%M %p"), audio_file_path.file_name().unwrap().to_string_lossy());
+    println!("[{}, {}/{}] Playing {}...", 
+        Local::now().format("%I:%M %p"), song_n, total_songs_n, 
+        audio_file_path.file_name().unwrap().to_string_lossy()
+    );
     let sink = Sink::try_new(&stream_handle).unwrap();
 
     sink.append(source);
@@ -286,9 +304,9 @@ fn pipe_audio(output_device: &rodio::Device, audio_file_path: PathBuf) {
 }
 
 
-fn println_end_time(duration: i64) {
-    let endtime_delta = Local::now() + Duration::minutes(duration);
-    println!("Will end at [{}] for [+{}m]", endtime_delta.format("%I:%M %p"), duration);
+fn println_end_time(duration_minute: i64, additional_seconds: i64) {
+    let endtime_delta = Local::now() + Duration::minutes(duration_minute) + Duration::seconds(additional_seconds);
+    println!("Will end at [{}] for [+{}m +{}s]", endtime_delta.format("%I:%M %p"), duration_minute, additional_seconds);
 }
 
 
@@ -311,7 +329,7 @@ fn main() {
     }
 
     // Apply SOX edits
-    println!("Pre-processing files...");
+    // println!("Pre-processing files...");
     let temp_output_dir = env::current_dir().unwrap().join("temp");
     let processed_song_paths = preproccess_audio(&temp_output_dir, song_paths, args.stereo_pan, &args.sox_path);
 
@@ -329,18 +347,20 @@ fn main() {
         thread::sleep(n_seconds);
     }
 
-    println_end_time(32);
-    println_end_time(45);
-    println_end_time(74);
-    println_end_time(80);
+    // Print estimated ending time
+    let pause_delta = (args.pause * (processed_song_paths.len() as f32)) as i64;
+    println_end_time(32, pause_delta);
+    println_end_time(45, pause_delta);
+    println_end_time(74, pause_delta);
+    println_end_time(80, pause_delta);
 
     // Play songs
-    for song in processed_song_paths {
-        pipe_audio(&output_device, song.to_path_buf());
+    for (i, song) in processed_song_paths.iter().enumerate() {
+        pipe_audio(&output_device, song.to_path_buf(), i+1, processed_song_paths.len());
 
         // Apply audio playback pause delay
         if args.pause > 0.0 {
-            println!("Waiting {} seconds...", args.pause);
+            println!("\tWaiting {} seconds...", args.pause);
 
             let n_seconds = time::Duration::from_secs_f32(args.pause.into());
             thread::sleep(n_seconds);
